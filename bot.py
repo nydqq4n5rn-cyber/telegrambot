@@ -6,16 +6,16 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import requests
 
-# Настраиваем логирование, чтобы видеть всё в консоли Render
+# Настраиваем логирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация токенов
+# Пытаемся взять ключ из GEMINI_KEY, а если его нет – берем из GOOGLE_API_KEY
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GEMINI_KEY = os.environ.get("GEMINI_KEY")
+GEMINI_KEY = os.environ.get("GEMINI_KEY") or os.environ.get("GOOGLE_API_KEY")
 
 SYSTEM_INSTRUCTION = """
 Ты – вежливый и профессиональный ИИ-ассистент, помогающий отвечать клиентам.
@@ -35,7 +35,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_text = update.message.text
 
-    # Обработка команды /start
     if user_text == "/start":
         await update.message.reply_text(
             "Здравствуйте! Я ваш ИИ-помощник. Помогаю отвечать клиентам.\n"
@@ -43,8 +42,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Запрос к Gemini по HTTP (для обхода европейской блокировки на Render)
     try:
+        # Если ключ вообще не нашелся в настройках Render
+        if not GEMINI_KEY:
+            await update.message.reply_text("Ошибка: На сервере не настроен API-ключ Gemini.")
+            return
+
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         headers = {'Content-Type': 'application/json'}
         payload = {
@@ -52,11 +55,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]}
         }
         
-        # Запускаем обычный запрос в асинхронном режиме
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
         result = response.json()
         
+        # Если Google вернул ошибку в ответе, выведем её в логи
+        if 'error' in result:
+            logger.error(f"Google API Error: {result['error']}")
+            await update.message.reply_text(f"Ошибка от Google: {result['error'].get('message', 'Неизвестная ошибка')}")
+            return
+            
         reply_text = result['candidates'][0]['content']['parts'][0]['text']
         await update.message.reply_text(reply_text)
         
@@ -69,35 +77,29 @@ async def main():
         logger.error("Ошибка: Переменная TELEGRAM_TOKEN не задана!")
         return
 
-    # Настройка Flask
     app = Flask('')
 
     @app.route('/')
     def home():
         return "Бот работает!"
 
-    # Запуск Flask-сервера
     port = int(os.environ.get('PORT', 10000))
     from werkzeug.serving import make_server
     server = make_server('0.0.0.0', port, app)
     
-    # Запускаем веб-сервер в фоновом режиме asyncio
     loop = asyncio.get_running_loop()
     loop.run_in_executor(None, server.serve_forever)
     logger.info("Веб-сервер Flask успешно запущен.")
 
-    # Настройка Телеграм-бота
     logger.info("Запуск бота Telegram...")
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CommandHandler("start", handle_message))
     
-    # Инициализируем и запускаем бота без конфликта потоков
     await application.initialize()
     await application.start()
     await application.updater.start_polling(drop_pending_updates=True)
     
-    # Оставляем бота работать бесконечно
     while True:
         await asyncio.sleep(3600)
 
