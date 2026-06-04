@@ -3,7 +3,17 @@ import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 import google.generativeai as genai
+from flask import Flask
+import threading
 
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Бот работает!"
+
+def run_web():
+    app.run(host='0.0.0.0', port=10000)
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -50,5 +60,6 @@ if __name__ == '__main__':
     import asyncio
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+    threading.Thread(target=run_web).start()
     application.run_polling(drop_pending_updates=True)
     
