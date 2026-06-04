@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY") or os.environ.get("GOOGLE_API_KEY")
 
-# Инструкции и прайс-лист для папиного бизнеса
 PRICING_AND_RULES = """
 Ты – вежливый и профессиональный ИИ-ассистент, помогающий отвечать клиентам фотографа.
 Твоя задача – отвечать на вопросы коротко, четко и помогать клиенту.
@@ -37,7 +36,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_text = update.message.text
 
-    # Мгновенное приветствие на /start
     if user_text == "/start":
         await update.message.reply_text(
             "Здравствуйте! Я ваш ИИ-помощник. Помогаю отвечать клиентам.\n"
@@ -47,17 +45,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         if not GEMINI_KEY:
-            await update.message.reply_text("Ошибка: На сервере Render не настроен API-ключ Gemini.")
+            await update.message.reply_text("Ошибка: На сервере не настроен API-ключ.")
             return
 
-        # Используем v1beta, где модель gemini-1.5-flash работает идеально
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        # ХИТРОСТЬ: Если ключ начинается на AQ, мы используем шлюз Vertex, иначе — AI Studio
+        if GEMINI_KEY.startswith("AQ"):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        else:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+
         headers = {'Content-Type': 'application/json'}
+        prompt_data = f"Инструкция: {PRICING_AND_RULES}\n\nКлиент пишет: {user_text}\nОтветь коротко:"
         
-        # Передаем инструкции и вопрос в одном тексте, убирая капризные системные поля
-        prompt_data = f"Системная инструкция:\n{PRICING_AND_RULES}\n\nВопрос от клиента: {user_text}\nОтвет ИИ-ассистента:"
-        
-        # Самая простая структура JSON, которая не вызывает ошибок валидации
+        # Передаем запрос в максимально разжеванном виде для Google
         payload = {
             "contents": [{
                 "parts": [{"text": prompt_data}]
@@ -68,23 +68,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
         result = response.json()
         
-        # Если Google вернет ошибку, бот выведет её текст
         if 'error' in result:
+            # Если Vertex требует другого обращения, пробуем сделать через генеративный шлюз
             logger.error(f"Google API Error: {result['error']}")
-            await update.message.reply_text(f"Ошибка от Google: {result['error'].get('message', 'Неизвестная ошибка')}")
+            await update.message.reply_text(f"Ошибка Google: {result['error'].get('message', 'Неверный тип ключа')}\n\nПодсказка: Если это ключ Vertex, создайте обычный API Key в Google AI Studio.")
             return
             
-        # Достаем текст ответа
         reply_text = result['candidates'][0]['content']['parts'][0]['text']
         await update.message.reply_text(reply_text)
         
     except Exception as e:
-        logger.error(f"Ошибка в handle_message: {e}")
-        await update.message.reply_text("Извините, возникли технические неполадки. Попробуйте еще раз.")
+        logger.error(f"Ошибка: {e}")
+        await update.message.reply_text("Извините, возникли технические неполадки.")
 
 async def main():
     if not TELEGRAM_TOKEN:
-        logger.error("Ошибка: Переменная TELEGRAM_TOKEN не задана!")
+        logger.error("Ошибка: TELEGRAM_TOKEN не задан!")
         return
 
     app = Flask('')
@@ -103,7 +102,6 @@ async def main():
 
     logger.info("Запуск бота Telegram...")
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CommandHandler("start", handle_message))
     
