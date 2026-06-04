@@ -1,18 +1,22 @@
 import os
-import threading
+import asyncio
+import logging
 from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import google.generativeai as genai
+import requests
 
-# Инициализация токенов из настроек Render
+# Настраиваем логирование, чтобы видеть всё в консоли Render
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Инициализация токенов
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
-# Настройка API ключа для Gemini
-genai.configure(api_key=GEMINI_KEY)
-
-# Инструкция для нейросети и прайс-лист папы
 SYSTEM_INSTRUCTION = """
 Ты – вежливый и профессиональный ИИ-ассистент, помогающий отвечать клиентам.
 Твоя задача – отвечать на вопросы коротко, четко и помогать клиенту.
@@ -25,17 +29,13 @@ SYSTEM_INSTRUCTION = """
 – Срок отдачи фотографий – до 7 дней.
 """
 
-# Словарь для хранения истории диалогов
-chats = {}
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
-    chat_id = update.effective_chat.id
     user_text = update.message.text
 
-    # Обработка кнопки СТАРТ (красивое приветствие без вызова ИИ)
+    # Обработка команды /start
     if user_text == "/start":
         await update.message.reply_text(
             "Здравствуйте! Я ваш ИИ-помощник. Помогаю отвечать клиентам.\n"
@@ -43,56 +43,66 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Создание сессии диалога с Gemini, если её ещё нет для этого пользователя
-    if chat_id not in chats:
-        try:
-            model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash",
-                system_instruction=SYSTEM_INSTRUCTION
-            )
-            chats[chat_id] = model.start_chat(history=[])
-        except Exception as e:
-            print(f"Ошибка создания модели Gemini: {e}")
-            await update.message.reply_text("Извините, возникли технические неполадки с подключением к ИИ.")
-            return
-
-    # Отправка вопроса в нейросеть с обязательным await
+    # Запрос к Gemini по HTTP (для обхода европейской блокировки на Render)
     try:
-        response = await chats[chat_id].send_message_async(user_text)
-        await update.message.reply_text(response.text)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        headers = {'Content-Type': 'application/json'}
+        payload = {
+            "contents": [{"parts": [{"text": user_text}]}],
+            "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]}
+        }
+        
+        # Запускаем обычный запрос в асинхронном режиме
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
+        result = response.json()
+        
+        reply_text = result['candidates'][0]['content']['parts'][0]['text']
+        await update.message.reply_text(reply_text)
+        
     except Exception as e:
-        print(f"Ошибка Gemini при генерации ответа: {e}")
+        logger.error(f"Ошибка Gemini: {e}")
         await update.message.reply_text("Извините, возникли технические неполадки. Попробуйте еще раз.")
 
-def main():
+async def main():
     if not TELEGRAM_TOKEN:
-        print("Ошибка: Переменная TELEGRAM_TOKEN не задана в Render!")
+        logger.error("Ошибка: Переменная TELEGRAM_TOKEN не задана!")
         return
 
-    # Создание веб-сервера Flask, чтобы Render видел, что проект "жив"
+    # Настройка Flask
     app = Flask('')
 
     @app.route('/')
     def home():
-        return "Бот успешно запущен и работает!"
+        return "Бот работает!"
 
-    def run_flask():
-        app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
-
-    # Запуск веб-сервера в фоновом потоке
-    threading.Thread(target=run_flask, daemon=True).start()
-
-    print("Бот запущен...")
+    # Запуск Flask-сервера
+    port = int(os.environ.get('PORT', 10000))
+    from werkzeug.serving import make_server
+    server = make_server('0.0.0.0', port, app)
     
-    # Настройка и запуск самого Телеграм-бота
+    # Запускаем веб-сервер в фоновом режиме asyncio
+    loop = asyncio.get_running_loop()
+    loop.run_in_executor(None, server.serve_forever)
+    logger.info("Веб-сервер Flask успешно запущен.")
+
+    # Настройка Телеграм-бота
+    logger.info("Запуск бота Telegram...")
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    # Добавляем обработчики сообщений и команды /start
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CommandHandler("start", handle_message))
     
-    # Запускаем чтение сообщений, сбрасывая старые зависшие запросы
-    application.run_polling(drop_pending_updates=True)
+    # Инициализируем и запускаем бота без конфликта потоков
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(drop_pending_updates=True)
+    
+    # Оставляем бота работать бесконечно
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Бот остановлен.")
