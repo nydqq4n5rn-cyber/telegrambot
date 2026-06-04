@@ -13,7 +13,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Пытаемся взять ключ из GEMINI_KEY, а если его нет – берем из GOOGLE_API_KEY
+# Считываем токены
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY") or os.environ.get("GOOGLE_API_KEY")
 
@@ -43,12 +43,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Если ключ вообще не нашелся в настройках Render
         if not GEMINI_KEY:
             await update.message.reply_text("Ошибка: На сервере не настроен API-ключ Gemini.")
             return
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        # ИСПРАВЛЕННЫЙ URL ДЛЯ GEMINI 1.5 FLASH:
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         headers = {'Content-Type': 'application/json'}
         payload = {
             "contents": [{"parts": [{"text": user_text}]}],
@@ -59,7 +59,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
         result = response.json()
         
-        # Если Google вернул ошибку в ответе, выведем её в логи
         if 'error' in result:
             logger.error(f"Google API Error: {result['error']}")
             await update.message.reply_text(f"Ошибка от Google: {result['error'].get('message', 'Неизвестная ошибка')}")
