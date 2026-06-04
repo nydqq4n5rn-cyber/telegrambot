@@ -18,7 +18,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY") or os.environ.get("GOOGLE_API_KEY")
 
 SYSTEM_INSTRUCTION = """
-Ты – вежливый и профессиональный ИИ-ассистент, помогающий отвечать клиентам.
+Ты – вежливый и профессиональный ИИ-ассистент, помогающий отвечать клиентам фотографа.
 Твоя задача – отвечать на вопросы коротко, четко и помогать клиенту.
 Не используй жесткие кнопки, веди живой диалог. Если не знаешь ответа,
 скажи, что менеджер скоро свяжется.
@@ -47,12 +47,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Ошибка: На сервере не настроен API-ключ Gemini.")
             return
 
-        # ИСПРАВЛЕННЫЙ URL ДЛЯ GEMINI 1.5 FLASH:
         url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         headers = {'Content-Type': 'application/json'}
+        
+        # Соединяем инструкцию и вопрос пользователя в один идеальный запрос
+        full_prompt = f"Инструкция для тебя:\n{SYSTEM_INSTRUCTION}\n\nВопрос от клиента: {user_text}"
+        
         payload = {
-            "contents": [{"parts": [{"text": user_text}]}],
-            "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]}
+            "contents": [{
+                "parts": [{"text": full_prompt}]
+            }]
         }
         
         loop = asyncio.get_running_loop()
