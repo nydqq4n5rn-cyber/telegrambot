@@ -6,18 +6,18 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import requests
 
-# Настраиваем логирование, чтобы всё видеть в панели Render
+# Настраиваем логирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Считываем токены (проверяем оба варианта ключа Gemini)
+# Считываем токены
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY") or os.environ.get("GOOGLE_API_KEY")
 
-# Четкие инструкции и прайс-лист для папиного бизнеса
+# Инструкции и прайс-лист для папиного бизнеса
 PRICING_AND_RULES = """
 Ты – вежливый и профессиональный ИИ-ассистент, помогающий отвечать клиентам фотографа.
 Твоя задача – отвечать на вопросы коротко, четко и помогать клиенту.
@@ -37,7 +37,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_text = update.message.text
 
-    # Если нажали Старт – мгновенно здороваемся без нейросети
+    # Мгновенное приветствие на /start
     if user_text == "/start":
         await update.message.reply_text(
             "Здравствуйте! Я ваш ИИ-помощник. Помогаю отвечать клиентам.\n"
@@ -50,32 +50,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Ошибка: На сервере Render не настроен API-ключ Gemini.")
             return
 
-        # Самый стабильный URL без лишних бета-приставок
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        # Используем v1beta, где модель gemini-1.5-flash работает идеально
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         headers = {'Content-Type': 'application/json'}
         
-        # Соединяем правила и вопрос в один текст, чтобы обойтись без капризного поля systemInstruction
-        prompt_data = f"Инструкция: {PRICING_AND_RULES}\n\nКлиент пишет: {user_text}\nОтветь клиенту:"
+        # Передаем инструкции и вопрос в одном тексте, убирая капризные системные поля
+        prompt_data = f"Системная инструкция:\n{PRICING_AND_RULES}\n\nВопрос от клиента: {user_text}\nОтвет ИИ-ассистента:"
         
-        # Идеально чистая структура JSON, которую понимает любая версия Google API
+        # Самая простая структура JSON, которая не вызывает ошибок валидации
         payload = {
             "contents": [{
                 "parts": [{"text": prompt_data}]
             }]
         }
         
-        # Безопасный асинхронный запрос
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
         result = response.json()
         
-        # Если Google вернул ошибку – бот честно сознается в чате
+        # Если Google вернет ошибку, бот выведет её текст
         if 'error' in result:
             logger.error(f"Google API Error: {result['error']}")
             await update.message.reply_text(f"Ошибка от Google: {result['error'].get('message', 'Неизвестная ошибка')}")
             return
             
-        # Забираем сгенерированный ответ и отправляем клиенту
+        # Достаем текст ответа
         reply_text = result['candidates'][0]['content']['parts'][0]['text']
         await update.message.reply_text(reply_text)
         
@@ -88,7 +87,6 @@ async def main():
         logger.error("Ошибка: Переменная TELEGRAM_TOKEN не задана!")
         return
 
-    # Поднимаем Flask, чтобы Render не ругался
     app = Flask('')
 
     @app.route('/')
@@ -103,7 +101,6 @@ async def main():
     loop.run_in_executor(None, server.serve_forever)
     logger.info("Веб-сервер Flask успешно запущен.")
 
-    # Стартуем Telegram Application
     logger.info("Запуск бота Telegram...")
     application = Application.builder().token(TELEGRAM_TOKEN).build()
     
