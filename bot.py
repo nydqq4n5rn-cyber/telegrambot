@@ -1,4 +1,3 @@
-
 import os
 import asyncio
 import logging
@@ -16,14 +15,12 @@ logger = logging.getLogger(__name__)
 
 # Считываем токены
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GEMINI_KEY = os.environ.get("GEMINI_KEY") or os.environ.get("GOOGLE_API_KEY")
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
-# Инструкции и прайс-лист
 PRICING_AND_RULES = """
-Ты – вежливый и профессиональный ИИ-ассистент, помогающий отвечать клиентам фотографа.
-Твоя задача – отвечать на вопросы коротко, четко и помогать клиенту.
-Не используй жесткие кнопки, веди живой диалог. Если не знаешь ответа,
-скажи, что менеджер скоро свяжется.
+Ты – вежливый ИИ-ассистент, помогающий отвечать клиентам фотографа.
+Отвечай коротко, четко, используй только информацию ниже.
+Если не знаешь ответа, скажи: "Менеджер скоро свяжется с вами".
 
 НАШ ПРАЙС И СТОИМОСТЬ СЪЁМОК:
 – Индивидуальная фотосессия: 6500 рублей в час.
@@ -46,37 +43,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        if not GEMINI_KEY:
-            await update.message.reply_text("Ошибка: На сервере Render не настроен API-ключ Gemini.")
+        if not HF_TOKEN:
+            await update.message.reply_text("Ошибка: На сервере Render не настроен HF_TOKEN.")
             return
 
-        # МЕНЯЕМ НА GEMINI-1.0-PRO (она доступна везде и не блокируется по гео-признаку)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.0-pro:generateContent?key={GEMINI_KEY}"
-        headers = {'Content-Type': 'application/json'}
+        # Используем стабильную модель Mistral, которая бесплатна и открыта для всех
+        url = "https://api-inference.huggingface.co/models/MistralAI/Mistral-7B-Instruct-v0.3"
+        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
         
-        prompt_data = f"Системная инструкция:\n{PRICING_AND_RULES}\n\nВопрос от клиента: {user_text}\nОтвет ИИ-ассистента:"
+        prompt_data = f"<s>[INST] {PRICING_AND_RULES}\n\nКлиент пишет: {user_text}\nОтветь клиенту на русском языке коротко: [/INST]"
         
         payload = {
-            "contents": [{
-                "parts": [{"text": prompt_data}]
-            }]
+            "inputs": prompt_data,
+            "parameters": {"max_new_tokens": 200, "temperature": 0.7}
         }
         
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
         result = response.json()
         
-        if 'error' in result:
-            logger.error(f"Google API Error: {result['error']}")
-            await update.message.reply_text(f"Ошибка от Google: {result['error'].get('message', 'Неизвестная ошибка')}")
-            return
-            
-        reply_text = result['candidates'][0]['content']['parts'][0]['text']
-        await update.message.reply_text(reply_text)
+        # Hugging Face возвращает список с текстом
+        if isinstance(result, list) and len(result) > 0 and 'generated_text' in result[0]:
+            full_reply = result[0]['generated_text']
+            # Отрезаем сам промпт, чтобы выдать только чистый ответ ИИ
+            reply_text = full_reply.split("[/INST]")[-1].strip()
+            await update.message.reply_text(reply_text)
+        else:
+            logger.error(f"HF API Error: {result}")
+            await update.message.reply_text("Извините, нейросеть сейчас перезагружается. Попробуйте через минуту.")
         
     except Exception as e:
         logger.error(f"Ошибка в handle_message: {e}")
-        await update.message.reply_text("Извините, возникли технические неполадки. Попробуйте еще раз.")
+        await update.message.reply_text("Извините, возникли технические неполадки.")
 
 async def main():
     if not TELEGRAM_TOKEN:
