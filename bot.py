@@ -13,7 +13,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Считываем токены
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
@@ -47,7 +46,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Ошибка: На сервере Render не настроен HF_TOKEN.")
             return
 
-        # Используем стабильную модель Mistral, которая бесплатна и открыта для всех
         url = "https://api-inference.huggingface.co/models/MistralAI/Mistral-7B-Instruct-v0.3"
         headers = {"Authorization": f"Bearer {HF_TOKEN}"}
         
@@ -62,10 +60,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
         result = response.json()
         
-        # Hugging Face возвращает список с текстом
         if isinstance(result, list) and len(result) > 0 and 'generated_text' in result[0]:
             full_reply = result[0]['generated_text']
-            # Отрезаем сам промпт, чтобы выдать только чистый ответ ИИ
             reply_text = full_reply.split("[/INST]")[-1].strip()
             await update.message.reply_text(reply_text)
         else:
@@ -103,6 +99,9 @@ async def main():
     
     await application.initialize()
     await application.start()
+    
+    # ХИТРОСТЬ: Удаляем вебхуки и жестко дропаем старые запросы, чтобы убить дубликаты бота
+    await application.bot.delete_webhook(drop_pending_updates=True)
     await application.updater.start_polling(drop_pending_updates=True)
     
     while True:
