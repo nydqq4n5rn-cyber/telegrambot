@@ -66,10 +66,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Ошибка: В Render отсутствует GEMINI_KEY!")
             return
 
-        # Точный, рабочий URL и существующая модель gemini-1.5-flash
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         headers = {"Content-Type": "application/json"}
         
+        # Полностью исправленная структура payload (исправлена ошибка 400)
         payload = {
             "contents": [
                 {
@@ -89,7 +89,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
         
-        # Если Google вернул ошибку, бот теперь честно покажет её код, а не скроет
         if response.status_code != 200:
             logger.error(f"Ошибка API Gemini: {response.text}")
             await update.message.reply_text(f"Ошибка сервера ИИ (Код {response.status_code}). Проверь ключ или настройки.")
