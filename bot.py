@@ -5,6 +5,8 @@ from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import requests
+from datetime import datetime
+import pytz
 
 # Настраиваем логирование
 logging.basicConfig(
@@ -23,7 +25,7 @@ PRICING_AND_RULES = """
 Основные типы вопросов которые задают клиенты ( в общем смысле,фразы могут отличаться,но смысл вопроса будет один ):
 –Добрый день,сколько стоит съемка ( фотосессия,час съёмки,сколько стоят ваши услуги,по чем снимаете? и т.д. )
 Твой ответ на такой вопрос должен быть:
-–Добрый день/утро/вечер/ночь ( ты должен выбрать тот вариант времени суток,в зависимости от времени когда пришло такое сообщение по МСК ).Стоимость моих услуг зависит от вида и продолжительности съёмки.Подскажите,какая съёмка вас интересует:Индивидуальная,Семейная,lovestory,Детская,Свадебная,Съёмка мероприятия ( день рождения,юбилей,или другое значимое событие ) или вас интересует съёмка для вашего бизнеса?
+–Добрый день/утро/вечер/ночь. Стоимость моих услуг зависит от вида и продолжительности съёмки.Подскажите,какая съёмка вас интересует:Индивидуальная,Семейная,lovestory,Детская,Свадебная,Съёмка мероприятия ( день рождения,юбилей,или другое значимое событие ) или вас интересует съёмка для вашего бизнеса?
 Далее в зависимости от ответа клиента ты должен дать развернутый ответ. вот примерные ответы клиентов (в общем смысле,фразы могут отличаться,но смысл ответа будет один )
 Если клиент спрашивает о том, чего нет в прайсе, или ты не знаешь ответа,
 строго отвечай фразой: "Затрудняюсь ответить на этот вопрос. Пожалуйста, напишите нашему менеджеру напрямую: @dmitryprof".
@@ -33,10 +35,22 @@ PRICING_AND_RULES = """
 – Свадебная съёмка: 55 000 рублей за 12 часов работы.
 – Студия оплачивается клиентом отдельно.
 – Срок отдачи фотографий – до 7 дней.
-
-ДОПОЛНИТЕЛЬНОЕ ПРАВИЛО ДЛЯ ИИ:
-Если клиент просто здоровается или спрашивает про стоимость съёмок и прайс, ты обязана использовать текст, написанный выше, поздороваться по времени суток и спросить, какая съёмка интересует. Не отправляй клиента к менеджеру сразу!
 """
+
+def get_welcome_by_time():
+    try:
+        tz = pytz.timezone('Europe/Moscow')
+        hour = datetime.now(tz).hour
+        if 5 <= hour < 12:
+            return "Доброе утро"
+        elif 12 <= hour < 18:
+            return "Добрый день"
+        elif 18 <= hour < 23:
+            return "Добрый вечер"
+        else:
+            return "Доброй ночи"
+    except Exception:
+        return "Добрый день"
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -51,19 +65,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    user_lower = user_text.lower()
+    
+    # ЖЕЛЕЗНАЯ СТРАХОВКА: Если клиент спрашивает про цену/прайс, бот отвечает САМ по вашему шаблону
+    if any(word in user_lower for word in ["сколько стоит", "стоимость", "цена", "прайс", "по чем", "услуг"]):
+        welcome = get_welcome_by_time()
+        await update.message.reply_text(
+            f"– {welcome}! Стоимость моих услуг зависит от вида и продолжительности съёмки. "
+            "Подскажите, какая съёмка вас интересует: Индивидуальная, Семейная, lovestory, Детская, Свадебная, "
+            "Съёмка мероприятия (день рождения, юбилей, или другое значимое событие) или вас интересует съёмка для вашего бизнеса?"
+        )
+        return
+
+    # Если клиент просто поздоровался
+    if any(word in user_lower for word in ["привет", "здравствуйте", "добрый день", "добрый вечер", "доброе утро"]):
+        welcome = get_welcome_by_time()
+        await update.message.reply_text(f"– {welcome}! Чем я могу вам помочь? Если вас интересует стоимость съёмок, просто спросите меня об этом.")
+        return
+
     fallback_message = (
         "Здравствуйте! Затрудняюсь ответить на этот вопрос.\n"
         "Пожалуйста, напишите нашему менеджеру напрямую: @dmitryprof, он ответит вам в ближайшее время!"
     )
 
     try:
-        if not HF_TOKEN:
-            await update.message.reply_text(fallback_message)
-            return
-
         url = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct"
         headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        
         prompt_data = f"<|im_start|>system\n{PRICING_AND_RULES}<|im_end|>\n<|im_start|>user\n{user_text}<|im_end|>\n<|im_start|>assistant\n"
         
         payload = {
@@ -79,20 +106,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             full_reply = result[0]['generated_text']
             reply_text = full_reply.split("<|im_start|>assistant\n")[-1].replace("<|im_end|>", "").strip()
             
-            if not reply_text:
-                await update.message.reply_text(fallback_message)
-            else:
+            if reply_text:
                 await update.message.reply_text(reply_text)
-        else:
-            # Если Hugging Face вернул ошибку или спит — включаем нашу умную ручную подстраховку!
-            user_lower = user_text.lower()
-            if any(word in user_lower for word in ["сколько стоит", "стоимость", "цена", "прайс", "съемка", "фотосессия"]):
-                await update.message.reply_text(
-                    "Стоимость моих услуг зависит от вида и продолжительности съёмки. "
-                    "Подскажите, какая съёмка вас интересует: Индивидуальная, Семейная, lovestory, Детская, Свадебная, Съёмка мероприятия или съёмка для вашего бизнеса?"
-                )
-            else:
-                await update.message.reply_text(fallback_message)
+                return
+
+        await update.message.reply_text(fallback_message)
         
     except Exception as e:
         logger.error(f"Ошибка: {e}")
