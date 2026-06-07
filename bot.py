@@ -13,20 +13,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Считываем токен Телеграма и ключ Gemini (больше никаких HF_TOKEN)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
 PRICING_AND_RULES = """
 Ты – вежливый ИИ-ассистент, помогающий отвечать клиентам фотографа.
-Ты должен давать развернутые ответы в зависимости от типа вопроса клиента,который пишет в бот.
-Основные типы вопросов которые задают клиенты ( в общем смысле,фразы могут отличаться,но смысл вопроса будет один ):
-–Добрый день,сколько стоит съемка ( фотосессия,час съёмки,сколько стоят ваши услуги,по чем снимаете? и т.д. )
-Твой ответ на такой вопрос должен быть:
-–Добрый день/утро/вечер/ночь ( ты должен выбрать тот вариант времени суток,в зависимости от времени когда пришло такое сообщение по МСК ).Стоимость моих услуг зависит от вида и продолжительности съёмки.Подскажите,какая съёмка вас интересует:Индивидуальная,Семейная,lovestory,Детская,Свадебная,Съёмка мероприятия ( день рождения,юбилей,или другое значимое событие ) или вас интересует съёмка для вашего бизнеса?
-Далее в зависимости от ответа клиента ты должен дать развернутый ответ. вот примерные ответы клиентов (в общем смысле,фразы могут отличаться,но смысл ответа будет один )
-Если клиент спрашивает о том, чего нет в прайсе, или ты не знаешь ответа,
-строго отвечай фразой: "Затрудняюсь ответить на этот вопрос. Пожалуйста, напишите нашему менеджеру напрямую: @dmitryprof".
+Ты должен давать развернутые ответы в зависимости от типа вопроса клиента.
 
 НАШ ПРАЙС И СТОИМОСТЬ СЪЁМОК:
 – Индивидуальная фотосессия: 6500 рублей в час.
@@ -34,8 +26,7 @@ PRICING_AND_RULES = """
 – Студия оплачивается клиентом отдельно.
 – Срок отдачи фотографий – до 7 дней.
 
-ДОПОЛНИТЕЛЬНОЕ ПРАВИЛО ДЛЯ ИИ:
-Если клиент просто здоровается или спрашивает про стоимость съёмок и прайс, ты обязана использовать текст, написанный выше, поздороваться по времени суток и спросить, какая съёмка интересует. Не отправляй клиента к менеджеру сразу! Веди живой, вежливый диалог как настоящий ассистент.
+Если клиент спрашивает о том, чего нет в прайсе, строго отвечай фразой: "Затрудняюсь ответить на этот вопрос. Пожалуйста, напишите нашему менеджеру напрямую: @dmitryprof".
 """
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -51,17 +42,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    fallback_message = (
-        "Здравствуйте! Затрудняюсь ответить на этот вопрос.\n"
-        "Пожалуйста, напишите нашему менеджеру напрямую: @dmitryprof, он ответит вам в ближайшее время!"
-    )
-
     try:
         if not GEMINI_KEY:
-            await update.message.reply_text("Ошибка: В Render не добавлен GEMINI_KEY!")
+            await update.message.reply_text("Ошибка: В Render отсутствует GEMINI_KEY!")
             return
 
-        # Запрос к API Gemini
+        # Используем самый стабильный URL v1beta
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         headers = {"Content-Type": "application/json"}
         
@@ -70,29 +56,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payload = {
             "contents": [{
                 "parts": [{"text": full_prompt}]
-            }],
-            "generationConfig": {
-                "temperature": 0.4,
-                "maxOutputTokens": 200
-            }
+            }]
         }
         
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
+        
+        # Если Гугл ответил ошибкой (например, плохой ключ)
+        if response.status_code != 200:
+            await update.message.reply_text(f"Гугл вернул ошибку сервера (Код {response.status_code}): {response.text[:150]}")
+            return
+            
         result = response.json()
         
-        # Проверяем ответ от Gemini
         if "candidates" in result and len(result["candidates"]) > 0:
             reply_text = result["candidates"][0]["content"]["parts"][0]["text"].strip()
             if reply_text:
                 await update.message.reply_text(reply_text)
                 return
 
-        await update.message.reply_text(fallback_message)
+        await update.message.reply_text("Здравствуйте! Затрудняюсь ответить на этот вопрос. Пожалуйста, напишите менеджеру: @dmitryprof")
         
     except Exception as e:
         logger.error(f"Ошибка бота: {e}")
-        await update.message.reply_text(fallback_message)
+        await update.message.reply_text(f"Произошла техническая ошибка в коде: {e}")
 
 async def main():
     if not TELEGRAM_TOKEN:
