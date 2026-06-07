@@ -27,7 +27,7 @@ SYSTEM_INSTRUCTION = """
 
 ПРАВИЛА ОТВЕТА ДЛЯ ИИ:
 1. Если клиент выбрал индивидуальную или свадебную съёмку, подробно распиши ему цену из прайса выше и спроси, сориентировать ли его по свободным датам.
-2. Если клиент спрашивает о том, чего нет в прайсе, или ты не знаешь точного ответа, строго и без лишних слов отвечачай фразой: 
+2. Если клиент спрашивает о том, чего нет в прайсе, или ты не знаешь точного ответа, строго и без лишних слов отвечай фразой: 
 "Затрудняюсь ответить на этот вопрос. Пожалуйста, напишите нашему менеджеру напрямую: @dmitryprof".
 """
 
@@ -46,8 +46,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_lower = user_text.lower()
     
-    # Железная страховка: если клиент просто здоровается или спрашивает про цену вообще,
-    # выдаем готовую папину фразу сразу же без запросов к ИИ.
+    # Железная страховка: на базовые приветствия отвечаем сами папиной фразой
     greeting_words = ["привет", "здравствуй", "добрый день", "добрый вечер", "доброе утро", "стоимость", "цена", "прайс", "сколько стоит"]
     if any(word in user_lower for word in greeting_words):
         await update.message.reply_text(
@@ -67,11 +66,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Ошибка: В Render отсутствует GEMINI_KEY!")
             return
 
-        # Официальный стабильный URL v1
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        # Используем официальное название новейшей модели Google
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
         headers = {"Content-Type": "application/json"}
         
-        # Передаем правила в специальном поле systemInstruction, как требует Google
         payload = {
             "contents": [
                 {
