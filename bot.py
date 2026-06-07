@@ -5,7 +5,6 @@ from flask import Flask
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import requests
-from datetime import datetime, timedelta
 
 # Настраиваем логирование
 logging.basicConfig(
@@ -14,17 +13,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Считываем токены
+# Считываем токен Телеграма и ключ Gemini (больше никаких HF_TOKEN)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-HF_TOKEN = os.environ.get("HF_TOKEN")
+GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
 PRICING_AND_RULES = """
 Ты – вежливый ИИ-ассистент, помогающий отвечать клиентам фотографа.
 Ты должен давать развернутые ответы в зависимости от типа вопроса клиента,который пишет в бот.
-Основные типы вопросов которые задают клиенты:
+Основные типы вопросов которые задают клиенты ( в общем смысле,фразы могут отличаться,но смысл вопроса будет один ):
 –Добрый день,сколько стоит съемка ( фотосессия,час съёмки,сколько стоят ваши услуги,по чем снимаете? и т.д. )
 Твой ответ на такой вопрос должен быть:
-–Добрый день/утро/вечер/ночь. Стоимость моих услуг зависит от вида и продолжительности съёмки.Подскажите,какая съёмка вас интересует:Индивидуальная,Семейная,lovestory,Детская,Свадебная,Съёмка мероприятия ( день рождения,юбилей,или другое значимое событие ) или вас интересует съёмка для вашего бизнеса?
+–Добрый день/утро/вечер/ночь ( ты должен выбрать тот вариант времени суток,в зависимости от времени когда пришло такое сообщение по МСК ).Стоимость моих услуг зависит от вида и продолжительности съёмки.Подскажите,какая съёмка вас интересует:Индивидуальная,Семейная,lovestory,Детская,Свадебная,Съёмка мероприятия ( день рождения,юбилей,или другое значимое событие ) или вас интересует съёмка для вашего бизнеса?
+Далее в зависимости от ответа клиента ты должен дать развернутый ответ. вот примерные ответы клиентов (в общем смысле,фразы могут отличаться,но смысл ответа будет один )
 Если клиент спрашивает о том, чего нет в прайсе, или ты не знаешь ответа,
 строго отвечай фразой: "Затрудняюсь ответить на этот вопрос. Пожалуйста, напишите нашему менеджеру напрямую: @dmitryprof".
 
@@ -33,25 +33,10 @@ PRICING_AND_RULES = """
 – Свадебная съёмка: 55 000 рублей за 12 часов работы.
 – Студия оплачивается клиентом отдельно.
 – Срок отдачи фотографий – до 7 дней.
-"""
 
-def get_welcome_by_time():
-    try:
-        # Считаем время по МСК (UTC + 3 часа) без сторонних библиотек
-        utc_now = datetime.utcnow()
-        moscow_now = utc_now + timedelta(hours=3)
-        hour = moscow_now.hour
-        
-        if 5 <= hour < 12:
-            return "Доброе утро"
-        elif 12 <= hour < 18:
-            return "Добрый день"
-        elif 18 <= hour < 23:
-            return "Добрый вечер"
-        else:
-            return "Доброй ночи"
-    except Exception:
-        return "Добрый день"
+ДОПОЛНИТЕЛЬНОЕ ПРАВИЛО ДЛЯ ИИ:
+Если клиент просто здоровается или спрашивает про стоимость съёмок и прайс, ты обязана использовать текст, написанный выше, поздороваться по времени суток и спросить, какая съёмка интересует. Не отправляй клиента к менеджеру сразу! Веди живой, вежливый диалог как настоящий ассистент.
+"""
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -66,47 +51,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    user_lower = user_text.lower()
-    
-    # ЖЕЛЕЗНЫЙ ОТВЕТ: Если клиент пишет про цену, бот мгновенно выдает ваш текст БЕЗ запросов в интернет!
-    if any(word in user_lower for word in ["сколько стоит", "стоимость", "цена", "прайс", "по чем", "услуг"]):
-        welcome = get_welcome_by_time()
-        await update.message.reply_text(
-            f"{welcome}! Стоимость моих услуг зависит от вида и продолжительности съёмки. "
-            "Подскажите, какая съёмка вас интересует: Индивидуальная, Семейная, lovestory, Детская, Свадебная, "
-            "Съёмка мероприятия (день рождения, юбилей, или другое значимое событие) или вас интересует съёмка для вашего бизнеса?"
-        )
-        return
-
-    # Железный ответ на простое приветствие
-    if any(word in user_lower for word in ["привет", "здравствуйте", "добрый день", "добрый вечер", "доброе утро"]):
-        welcome = get_welcome_by_time()
-        await update.message.reply_text(f"{welcome}! Чем я могу вам помочь? Если вас интересует стоимость съёмок, просто спросите меня о цене.")
-        return
-
     fallback_message = (
         "Здравствуйте! Затрудняюсь ответить на этот вопрос.\n"
         "Пожалуйста, напишите нашему менеджеру напрямую: @dmitryprof, он ответит вам в ближайшее время!"
     )
 
     try:
-        url = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        prompt_data = f"<|im_start|>system\n{PRICING_AND_RULES}<|im_end|>\n<|im_start|>user\n{user_text}<|im_end|>\n<|im_start|>assistant\n"
+        if not GEMINI_KEY:
+            await update.message.reply_text("Ошибка: В Render не добавлен GEMINI_KEY!")
+            return
+
+        # Запрос к API Gemini
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        headers = {"Content-Type": "application/json"}
+        
+        full_prompt = f"Системная инструкция:\n{PRICING_AND_RULES}\n\nСообщение от клиента: {user_text}\nОтвет ассистента:"
         
         payload = {
-            "inputs": prompt_data,
-            "parameters": {"max_new_tokens": 150, "temperature": 0.5}
+            "contents": [{
+                "parts": [{"text": full_prompt}]
+            }],
+            "generationConfig": {
+                "temperature": 0.4,
+                "maxOutputTokens": 200
+            }
         }
         
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
         result = response.json()
         
-        if isinstance(result, list) and len(result) > 0 and 'generated_text' in result[0]:
-            full_reply = result[0]['generated_text']
-            reply_text = full_reply.split("<|im_start|>assistant\n")[-1].replace("<|im_end|>", "").strip()
-            
+        # Проверяем ответ от Gemini
+        if "candidates" in result and len(result["candidates"]) > 0:
+            reply_text = result["candidates"][0]["content"]["parts"][0]["text"].strip()
             if reply_text:
                 await update.message.reply_text(reply_text)
                 return
@@ -114,7 +91,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(fallback_message)
         
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"Ошибка бота: {e}")
         await update.message.reply_text(fallback_message)
 
 async def main():
