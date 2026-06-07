@@ -13,11 +13,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Считываем токены
+# Считываем токены из Render
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
-PRICING_AND_RULES = """
+SYSTEM_INSTRUCTION = """
 Ты – вежливый ИИ-ассистент, помогающий отвечать клиентам фотографа Дмитрия.
 Веди живой, вежливый и естественный диалог как настоящий человек-помощник.
 
@@ -27,7 +27,7 @@ PRICING_AND_RULES = """
 
 ПРАВИЛА ОТВЕТА ДЛЯ ИИ:
 1. Если клиент выбрал индивидуальную или свадебную съёмку, подробно распиши ему цену из прайса выше и спроси, сориентировать ли его по свободным датам.
-2. Если клиент спрашивает о том, чего нет в прайсе, или ты не знаешь точного ответа, строго и без лишних слов отвечай фразой: 
+2. Если клиент спрашивает о том, чего нет в прайсе, или ты не знаешь точного ответа, строго и без лишних слов отвечачай фразой: 
 "Затрудняюсь ответить на этот вопрос. Пожалуйста, напишите нашему менеджеру напрямую: @dmitryprof".
 """
 
@@ -46,8 +46,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_lower = user_text.lower()
     
-    # ЖЕЛЕЗНАЯ СТРАХОВКА ДЛЯ ПАПЫ: Если клиент просто здоровается или спрашивает про цену в общем,
-    # бот отвечает САМ, моментально и без интернета, идеальной папиной фразой!
+    # Железная страховка: если клиент просто здоровается или спрашивает про цену вообще,
+    # выдаем готовую папину фразу сразу же без запросов к ИИ.
     greeting_words = ["привет", "здравствуй", "добрый день", "добрый вечер", "доброе утро", "стоимость", "цена", "прайс", "сколько стоит"]
     if any(word in user_lower for word in greeting_words):
         await update.message.reply_text(
@@ -67,17 +67,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Ошибка: В Render отсутствует GEMINI_KEY!")
             return
 
-        # Стабильный URL v1
+        # Официальный стабильный URL v1
         url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         headers = {"Content-Type": "application/json"}
         
+        # Передаем правила в специальном поле systemInstruction, как требует Google
         payload = {
             "contents": [
                 {
                     "role": "user",
-                    "parts": [{"text": f"{PRICING_AND_RULES}\n\nКлиент пишет: {user_text}\nОтветь как ассистент фотографа:"}]
+                    "parts": [{"text": user_text}]
                 }
             ],
+            "systemInstruction": {
+                "parts": [{"text": SYSTEM_INSTRUCTION}]
+            },
             "generationConfig": {
                 "temperature": 0.3,
                 "maxOutputTokens": 300
