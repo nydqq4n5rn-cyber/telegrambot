@@ -6,20 +6,25 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import requests
 
+# Настраиваем логирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
+# Считываем токены
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-# Используем токен Hugging Face, который ты уже сделал!
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
-PRICING_AND_RULES = """
+# Юзернейм папы для перенаправления клиентов
+PAPA_USERNAME = "@dmitryprof"
+
+PRICING_AND_RULES = f"""
 Ты – вежливый ИИ-ассистент, помогающий отвечать клиентам фотографа.
 Отвечай коротко, четко, используй только информацию ниже.
-Если не знаешь ответа, скажи: "Менеджер скоро свяжется с вами".
+Если клиент спрашивает о том, чего нет в прайсе, или ты не знаешь ответа,
+строго отвечай фразой: "Затрудняюсь ответить на этот вопрос. Пожалуйста, напишите нашему менеджеру напрямую: {PAPA_USERNAME}".
 
 НАШ ПРАЙС И СТОИМОСТЬ СЪЁМОК:
 – Индивидуальная фотосессия: 6500 рублей в час.
@@ -41,12 +46,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Готовый текст-заглушка для перенаправления к папе при сбоях
+    fallback_message = (
+        f"Здравствуйте! Затрудняюсь ответить на этот вопрос.\n"
+        f"Пожалуйста, напишите нашему менеджеру напрямую: {PAPA_USERNAME}, он ответит вам в ближайшее время!"
+    )
+
     try:
         if not HF_TOKEN:
-            await update.message.reply_text("Ошибка: На сервере Render не настроен HF_TOKEN.")
+            await update.message.reply_text(fallback_message)
             return
 
-        # Меняем модель на сверхлегкую и быструю Qwen, у которой нет проблем с доступностью
         url = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct"
         headers = {"Authorization": f"Bearer {HF_TOKEN}"}
         
@@ -63,19 +73,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         if isinstance(result, list) and len(result) > 0 and 'generated_text' in result[0]:
             full_reply = result[0]['generated_text']
-            # Достаем чистый ответ
             reply_text = full_reply.split("<|im_start|>assistant\n")[-1].replace("<|im_end|>", "").strip()
-            await update.message.reply_text(reply_text)
-        else:
-            # Если модель спит, будим её простым текстовым ответом по прайсу из кода
-            if "фотосесси" in user_text.lower() or "сколько стоит" in user_text.lower():
-                await update.message.reply_text("Индивидуальная фотосессия стоит 6500 рублей в час. Свадебная съёмка — 55 000 рублей за 12 часов.")
+            
+            # Если нейросеть выдала пустой ответ или запуталась, шлем заглушку
+            if not reply_text:
+                await update.message.reply_text(fallback_message)
             else:
-                await update.message.reply_text("Здравствуйте! Менеджер скоро свяжется с вами для уточнения деталей.")
+                await update.message.reply_text(reply_text)
+        else:
+            # Если модель Hugging Face спит или перегружена — выдаем умный ответ по прайсу или ссылку на папу
+            if "фотосесси" in user_text.lower() or "сколько стоит" in user_text.lower() or "прайс" in user_text.lower():
+                await update.message.reply_text(
+                    "Индивидуальная фотосессия стоит 6500 рублей в час. Свадебная съёмка — 55 000 рублей за 12 часов. "
+                    f"По остальным вопросам вы можете написать напрямую менеджеру: {PAPA_USERNAME}"
+                )
+            else:
+                await update.message.reply_text(fallback_message)
         
     except Exception as e:
         logger.error(f"Ошибка: {e}")
-        await update.message.reply_text("Индивидуальная фотосессия стоит 6500 рублей в час, свадебная — 55 000 рублей. Менеджер скоро свяжется с вами!")
+        await update.message.reply_text(fallback_message)
 
 async def main():
     if not TELEGRAM_TOKEN:
