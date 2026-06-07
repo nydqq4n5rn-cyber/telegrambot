@@ -13,7 +13,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Считываем токены из Render
+# Считываем токены
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
@@ -46,7 +46,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_lower = user_text.lower()
     
-    # Железная страховка: на базовые приветствия отвечаем сами папиной фразой
+    # Железная страховка на приветствия
     greeting_words = ["привет", "здравствуй", "добрый день", "добрый вечер", "доброе утро", "стоимость", "цена", "прайс", "сколько стоит"]
     if any(word in user_lower for word in greeting_words):
         await update.message.reply_text(
@@ -66,8 +66,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Ошибка: В Render отсутствует GEMINI_KEY!")
             return
 
-        # Используем официальное название новейшей модели Google
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
+        # Точный, рабочий URL и существующая модель gemini-1.5-flash
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         headers = {"Content-Type": "application/json"}
         
         payload = {
@@ -89,9 +89,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
         
+        # Если Google вернул ошибку, бот теперь честно покажет её код, а не скроет
         if response.status_code != 200:
             logger.error(f"Ошибка API Gemini: {response.text}")
-            await update.message.reply_text(fallback_message)
+            await update.message.reply_text(f"Ошибка сервера ИИ (Код {response.status_code}). Проверь ключ или настройки.")
             return
             
         result = response.json()
