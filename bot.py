@@ -1,76 +1,81 @@
 import os
+import logging
 import requests
 from telegram import Update
-from telegram.ext import ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Берем ключ из переменных окружения (в Render он должен быть прописан в Environment Variables)
+# Настройка логов
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Получение переменных из Render
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Здравствуйте! Я помощник фотографа. Чем могу помочь?")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
     user_text = update.message.text
-
-    if user_text == "/start":
-        await update.message.reply_text(
-            "Здравствуйте! Я ваш ИИ-помощник. Помогаю отвечать клиентам.\n"
-            "Задайте мне любой вопрос о стоимости или условиях съёмки, и я отвечу!"
-        )
-        return
-
     user_lower = user_text.lower()
+    
+    # 1. Прайс-лист (База знаний бота)
+    price_info = (
+        "Вот актуальные цены:\n"
+        "• Индивидуальная фотосессия: 6500 руб./час.\n"
+        "• Свадебная съёмка: 55 000 руб. за 12 часов.\n"
+        "Важные условия:\n"
+        "– Студия оплачивается клиентом отдельно.\n"
+        "– Срок отдачи фотографий – до 7 дней."
+    )
 
-    # Железная страховка на приветствия
-    greeting_words = ["привет", "здравствуй", "добрый день", "добрый вечер", "доброе утро", "стоимость", "цена", "прайс", "сколько стоит"]
-    if any(word in user_lower for word in greeting_words):
-        await update.message.reply_text(
-            "Добрый день! Стоимость моих услуг зависит от вида и продолжительности съёмки. \n"
-            "Подскажите, какая съёмка вас интересует: Индивидуальная, Семейная, Lovestory, Детская, Свадебная, "
-            "Съёмка мероприятия (день рождения, юбилей) или вас интересует съёмка для вашего бизнеса?"
-        )
+    # 2. Быстрые ответы без ИИ
+    trigger_words = ["цена", "прайс", "сколько стоит", "индивидуальная", "свадебная", "съёмка"]
+    if any(word in user_lower for word in trigger_words):
+        await update.message.reply_text(f"Добрый день! {price_info}\n\nПодскажите, что именно вас интересует?")
         return
 
-    fallback_message = (
-        "Здравствуйте! Затрудняюсь ответить на этот вопрос.\n"
-        "Пожалуйста, напишите нашему менеджеру напрямую: @dmitryprof, он ответит вам в ближайшее время!"
+    # 3. Умный ответ через ИИ
+    system_instruction = (
+        "Ты — профессиональный помощник фотографа. "
+        "Твои цены: Индивидуальная 6500р/час, Свадебная 55000р за 12 часов работы. "
+        "Условия: студия оплачивается клиентом отдельно, срок отдачи фото — до 7 дней. "
+        "Отвечай вежливо и кратко. Если спрашивают что-то, чего нет в твоей базе — перенаправляй к менеджеру: @dmitryprof."
     )
 
     try:
-        if not GEMINI_KEY:
-            await update.message.reply_text("Ошибка: В Render отсутствует GEMINI_KEY!")
-            return
-
-        # ИСПРАВЛЕНО: Стабильный URL (v1 вместо v1beta) для защиты от ошибки 404
         url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
-        headers = {"Content-Type": "application/json"}
-        
-        # ИСПРАВЛЕНО: Чистая структура payload для защиты от ошибки 400
         payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": user_text}
-                    ]
-                }
-            ]
+            "system_instruction": {"parts": [{"text": system_instruction}]},
+            "contents": [{"role": "user", "parts": [{"text": user_text}]}]
         }
-
-        # Отправляем запрос к ИИ Google Gemini
-        response = requests.post(url, headers=headers, json=payload)
+        
+        response = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=10)
         
         if response.status_code == 200:
-            res_data = response.json()
-            # Достаем текст ответа из структуры JSON Gemini
-            try:
-                ai_text = res_data["candidates"][0]["content"]["parts"][0]["text"]
-                await update.message.reply_text(ai_text)
-            except (KeyError, IndexError):
-                await update.message.reply_text(fallback_message)
+            ai_text = response.json()['candidates'][0]['content']['parts'][0]['text']
+            await update.message.reply_text(ai_text)
         else:
-            # Если сервер вернул ошибку, бот сообщит её код
-            await update.message.reply_text(f"Ошибка сервера ИИ (Код {response.status_code}). Проверь ключ или настройки.")
-
+            await update.message.reply_text("Напишите, пожалуйста, нашему менеджеру: @dmitryprof")
+            
     except Exception as e:
-        print(f"Ошибка при запросе к Gemini: {e}")
-        await update.message.reply_text(fallback_message)
+        logger.error(f"Ошибка ИИ: {e}")
+        await update.message.reply_text("Напишите нашему менеджеру напрямую: @dmitryprof")
+
+def main():
+    if not TELEGRAM_TOKEN or not GEMINI_KEY:
+        print("Ошибка: Отсутствуют переменные окружения TELEGRAM_TOKEN или GEMINI_KEY")
+        return
+
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    print("Бот запущен...")
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
