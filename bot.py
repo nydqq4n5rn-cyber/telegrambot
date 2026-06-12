@@ -6,7 +6,7 @@ from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Настройка Flask для «обмана» Render (чтобы он не убивал сервис)
+# 1. Настройка Flask для «обмана» Render
 app = Flask(__name__)
 @app.route('/')
 def home():
@@ -16,27 +16,52 @@ def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# Настройка бота
+# 2. Настройка бота
 logging.basicConfig(level=logging.INFO)
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 
-async def start(update, context):
-    await update.message.reply_text("Здравствуйте! Я помощник фотографа.")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Здравствуйте! Я помощник фотографа. Чем могу помочь?")
 
-async def handle_message(update, context):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    # Логика ответов
-    await update.message.reply_text("Принято, я обрабатываю ваш запрос...")
+    user_lower = user_text.lower()
+    
+    # ПРАЙС-ЛИСТ (встроен в бота)
+    if any(w in user_lower for w in ["цена", "прайс", "сколько стоит", "съёмка", "индивидуальная", "свадебная"]):
+        msg = (
+            "Добрый день!\n"
+            "• Индивидуальная фотосессия: 6500 руб./час.\n"
+            "• Свадебная съёмка: 55 000 руб. за 12 часов.\n"
+            "Важные условия:\n"
+            "– Студия оплачивается клиентом отдельно.\n"
+            "– Срок отдачи фотографий – до 7 дней.\n\n"
+            "Подскажите, какая именно съёмка вас интересует?"
+        )
+        await update.message.reply_text(msg)
+        return
+
+    # Запрос к ИИ, если это не вопрос о цене
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+        resp = requests.post(url, json={"contents": [{"parts": [{"text": user_text}]}]}, timeout=10)
+        if resp.status_code == 200:
+            text = resp.json()['candidates'][0]['content']['parts'][0]['text']
+            await update.message.reply_text(text)
+        else:
+            await update.message.reply_text("Напишите нашему менеджеру: @dmitryprof")
+    except:
+        await update.message.reply_text("Напишите нашему менеджеру: @dmitryprof")
 
 if __name__ == '__main__':
-    # 1. Запускаем веб-сервер в отдельном потоке
+    # Запуск веб-сервера
     threading.Thread(target=run_web, daemon=True).start()
     
-    # 2. Запускаем бота
+    # Запуск бота
     bot_app = ApplicationBuilder().token(TOKEN).build()
     bot_app.add_handler(CommandHandler("start", start))
     bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("Бот запущен!")
+    print("Бот запущен и готов к работе!")
     bot_app.run_polling()
