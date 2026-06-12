@@ -8,38 +8,32 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Получаем данные из переменных Render
+# Получаем переменные окружения
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_KEY = os.environ.get("GEMINI_KEY")
 PORT = int(os.environ.get("PORT", 8080))
-# Твой URL на Render
-WEBHOOK_URL = "https://telegrambot-4-sib5.onrender.com"
+# ВАЖНО: укажи сюда свой URL из Render (например, https://tvoj-bot.onrender.com)
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL") 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Здравствуйте! Я помощник фотографа. Чем могу помочь?")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-
     user_text = update.message.text
     user_lower = user_text.lower()
     
-    # Прайс-лист
-    if any(w in user_lower for w in ["цена", "прайс", "сколько стоит", "съёмка", "свадебная", "индивидуальная"]):
+    # 1. Железный ответ на цену (без запроса к ИИ)
+    if any(w in user_lower for w in ["цена", "прайс", "сколько стоит", "индивидуальная", "свадебная"]):
         msg = (
             "Добрый день!\n"
             "• Индивидуальная фотосессия: 6500 руб./час.\n"
             "• Свадебная съёмка: 55 000 руб. за 12 часов.\n"
-            "Важно:\n"
-            "– Студия оплачивается отдельно.\n"
-            "– Срок отдачи фотографий – до 7 дней.\n\n"
-            "Подскажите, какая именно съёмка вас интересует?"
+            "Условия: студия оплачивается отдельно, фото отдаем до 7 дней."
         )
         await update.message.reply_text(msg)
         return
 
-    # Ответ через Gemini
+    # 2. Ответ через Gemini
     try:
         url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
         payload = {"contents": [{"parts": [{"text": user_text}]}]}
@@ -50,22 +44,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ai_text = response.json()['candidates'][0]['content']['parts'][0]['text']
             await update.message.reply_text(ai_text)
         else:
-            await update.message.reply_text("Напишите нашему менеджеру: @dmitryprof")
+            await update.message.reply_text("Извините, сейчас технические работы. Напишите @dmitryprof")
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"Ошибка ИИ: {e}")
         await update.message.reply_text("Напишите нашему менеджеру: @dmitryprof")
 
 if __name__ == '__main__':
-    if not TOKEN or not GEMINI_KEY:
-        print("Ошибка: Отсутствуют токены в переменных окружения!")
+    if not TOKEN or not GEMINI_KEY or not WEBHOOK_URL:
+        print("Ошибка: Проверьте TELEGRAM_TOKEN, GEMINI_KEY и WEBHOOK_URL в настройках Render!")
         exit(1)
 
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    # Запуск через вебхук
-    print("Запуск бота через Webhook...")
+    # Запуск через Webhook (единственный способ для Render Web Service)
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
